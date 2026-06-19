@@ -128,7 +128,22 @@ export default class svgMap {
 
       // Offset from computed pin position, in SVG units (added after auto center or pinX/pinY)
       pinOffsetX: 0,
-      pinOffsetY: 0
+      pinOffsetY: 0,
+
+      // Legend options
+      showLegend: false,
+      legendPosition: 'topRight',
+
+      // Cluster pins options
+      clusterPins: false,
+      clusterThreshold: 2,
+      clusterRadius: 15,
+      clusterColor: '#FF6B6B',
+      clusterTextColor: '#FFFFFF',
+
+      // Comparison tooltip options
+      comparisonTooltips: false,
+      comparisonTooltipMax: 4
     };
 
     this.options = Object.assign({}, defaultOptions, options);
@@ -441,6 +456,8 @@ export default class svgMap {
   // Apply the data to the map
 
   applyData(data) {
+    this.options.data = data;
+
     var max = null;
     var min = null;
 
@@ -457,6 +474,10 @@ export default class svgMap {
       (max = Math.min(max, data.data[data.applyData].thresholdMax));
     data.data[data.applyData].thresholdMin &&
       (min = Math.max(min, data.data[data.applyData].thresholdMin));
+
+    // Store for legend
+    this._legendMin = min;
+    this._legendMax = max;
 
     // Loop through countries and set colors
     Object.keys(this.countries).forEach(
@@ -494,6 +515,30 @@ export default class svgMap {
         element.style.setProperty('--svg-map-country-fill', color);
       }.bind(this)
     );
+
+    // Update legend if exists
+    if (this.legendElement) {
+      this.updateLegend();
+    }
+
+    // Update comparison tooltips if active
+    if (this._comparisonCountries && this._comparisonCountries.length > 0) {
+      this.updateComparisonTooltips();
+    }
+
+    // Re-create cluster pins if enabled
+    if (this.options.clusterPins && this.pinGroup) {
+      var countryElements = [];
+      Object.keys(this.countries).forEach(
+        function (countryID) {
+          var el = document.getElementById(
+            this.id + '-map-country-' + countryID
+          );
+          if (el) countryElements.push(el);
+        }.bind(this)
+      );
+      this.createStaticPins(countryElements);
+    }
   }
 
   calculateColorRatio(value, min, max, ratioType) {
@@ -1126,6 +1171,14 @@ export default class svgMap {
       this.createStaticPins(countryElements);
     }
 
+    if (this.options.showLegend) {
+      this.createLegend();
+    }
+
+    if (this.options.comparisonTooltips) {
+      this.initComparisonTooltips();
+    }
+
     let pointerStart = null;
     let activeCountry = null;
 
@@ -1390,6 +1443,61 @@ export default class svgMap {
     );
   }
 
+  // Compute pin position for a country
+
+  getPinPosition(countryElement, countryID) {
+    var countryValues = this.options.data.values[countryID];
+    var cx, cy;
+
+    if (
+      countryValues &&
+      countryValues.pinX != null &&
+      countryValues.pinY != null
+    ) {
+      cx = countryValues.pinX;
+      cy = countryValues.pinY;
+    } else {
+      var d = countryElement.getAttribute('d');
+      var subPaths = d.split(/(?=M)/).filter((s) => s.trim().length > 0);
+      var largestBB = null;
+      var largestArea = -1;
+
+      subPaths.forEach(
+        function (subPath) {
+          var tmp = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'path'
+          );
+          tmp.setAttribute('d', subPath);
+          this.mapImage.appendChild(tmp);
+          var bb = tmp.getBBox();
+          var area = bb.width * bb.height;
+          if (area > largestArea) {
+            largestArea = area;
+            largestBB = bb;
+          }
+          this.mapImage.removeChild(tmp);
+        }.bind(this)
+      );
+
+      cx = largestBB.x + largestBB.width / 2;
+      cy = largestBB.y + largestBB.height / 2;
+    }
+
+    var offsetX =
+      countryValues && countryValues.pinOffsetX != null
+        ? countryValues.pinOffsetX
+        : this.options.pinOffsetX;
+    var offsetY =
+      countryValues && countryValues.pinOffsetY != null
+        ? countryValues.pinOffsetY
+        : this.options.pinOffsetY;
+    cx += offsetX;
+    cy += offsetY;
+
+    return { x: cx, y: cy };
+  }
+
   // Create static pins on the map
 
   createStaticPins(countryElements) {
@@ -1401,130 +1509,268 @@ export default class svgMap {
     this.pinGroup.classList.add('svgMap-pin-group');
     this.mapImage.appendChild(this.pinGroup);
 
+    var currentZoom = this.mapPanZoom ? this.mapPanZoom.getZoom() : 1;
+
+    // Collect all pins with their positions
+    var allPins = [];
     countryElements.forEach(
       function (countryElement) {
         var countryID = countryElement.getAttribute('data-id');
         if (!this.shouldShowPin(countryID)) {
           return;
         }
+        var pos = this.getPinPosition(countryElement, countryID);
+        allPins.push({
+          countryID: countryID,
+          countryElement: countryElement,
+          x: pos.x,
+          y: pos.y
+        });
+      }.bind(this)
+    );
 
-        var countryValues = this.options.data.values[countryID];
-        var cx, cy;
+    // If clusterPins is enabled, group pins
+    if (this.options.clusterPins) {
+      // Cluster radius in SVG units, adjusted by zoom (smaller at higher zoom)
+      var baseClusterRadius = this.options.clusterRadius;
+      var clusterDistance = baseClusterRadius / Math.max(currentZoom, 1);
 
-        if (
-          countryValues &&
-          countryValues.pinX != null &&
-          countryValues.pinY != null
-        ) {
-          cx = countryValues.pinX;
-          cy = countryValues.pinY;
-        } else {
-          // Split the path at absolute M commands and use the largest sub-path
-          // to avoid overseas territories (islands, colonies) skewing the center.
-          var d = countryElement.getAttribute('d');
-          var subPaths = d.split(/(?=M)/).filter((s) => s.trim().length > 0);
-          var largestBB = null;
-          var largestArea = -1;
+      // Group pins into clusters
+      var clusters = [];
+      var used = {};
 
-          subPaths.forEach(
-            function (subPath) {
-              var tmp = document.createElementNS(
-                'http://www.w3.org/2000/svg',
-                'path'
-              );
-              tmp.setAttribute('d', subPath);
-              this.mapImage.appendChild(tmp);
-              var bb = tmp.getBBox();
-              var area = bb.width * bb.height;
-              if (area > largestArea) {
-                largestArea = area;
-                largestBB = bb;
-              }
-              this.mapImage.removeChild(tmp);
-            }.bind(this)
-          );
+      // Sort pins: prefer larger countries (national level) first when zoomed out
+      // Simple heuristic: process pins in order to ensure stable clustering
+      var sortedPins = allPins.slice();
 
-          cx = largestBB.x + largestBB.width / 2;
-          cy = largestBB.y + largestBB.height / 2;
-        }
+      for (var i = 0; i < sortedPins.length; i++) {
+        var pin = sortedPins[i];
+        if (used[pin.countryID]) continue;
 
-        var offsetX =
-          countryValues && countryValues.pinOffsetX != null
-            ? countryValues.pinOffsetX
-            : this.options.pinOffsetX;
-        var offsetY =
-          countryValues && countryValues.pinOffsetY != null
-            ? countryValues.pinOffsetY
-            : this.options.pinOffsetY;
-        cx += offsetX;
-        cy += offsetY;
+        var cluster = [pin];
+        used[pin.countryID] = true;
 
-        var color =
-          (countryValues && countryValues.pinColor) || this.options.pinColor;
-        var size =
-          (countryValues && countryValues.pinSize) || this.options.pinSize;
-        var strokeColor =
-          (countryValues && countryValues.pinStrokeColor) ||
-          this.options.pinStrokeColor;
-        var strokeWidth =
-          (countryValues && countryValues.pinStrokeWidth) ||
-          this.options.pinStrokeWidth;
+        for (var j = i + 1; j < sortedPins.length; j++) {
+          var otherPin = sortedPins[j];
+          if (used[otherPin.countryID]) continue;
 
-        if (typeof this.options.onGetPin === 'function') {
-          var custom = this.options.onGetPin(countryID, countryValues);
-          if (custom) {
-            custom.setAttribute(
-              'transform',
-              'translate(' + cx + ',' + cy + ')'
-            );
-            this.pinGroup.appendChild(custom);
-            return;
+          var dx = pin.x - otherPin.x;
+          var dy = pin.y - otherPin.y;
+          var dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist <= clusterDistance) {
+            cluster.push(otherPin);
+            used[otherPin.countryID] = true;
           }
         }
 
-        var pinImage =
-          (countryValues && countryValues.pinImage) || this.options.pinImage;
+        clusters.push(cluster);
+      }
 
-        if (pinImage) {
-          var pinW =
-            (countryValues && countryValues.pinImageWidth) ||
-            this.options.pinImageWidth;
-          var pinH =
-            (countryValues && countryValues.pinImageHeight) ||
-            this.options.pinImageHeight;
-          var img = document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'image'
-          );
-          img.setAttribute('href', pinImage);
-          img.setAttribute('x', cx - pinW / 2);
-          img.setAttribute('y', cy - pinH / 2);
-          img.setAttribute('width', pinW);
-          img.setAttribute('height', pinH);
-          img.setAttribute('data-id', countryID);
-          img.classList.add('svgMap-pin');
-          this.pinGroup.appendChild(img);
-          return;
-        }
+      // Render clusters and individual pins
+      clusters.forEach(
+        function (cluster) {
+          if (
+            cluster.length >= this.options.clusterThreshold &&
+            cluster.length > 1
+          ) {
+            this.createClusterPin(cluster);
+          } else {
+            cluster.forEach(
+              function (pin) {
+                this.createSinglePin(pin);
+              }.bind(this)
+            );
+          }
+        }.bind(this)
+      );
 
-        var circle = document.createElementNS(
-          'http://www.w3.org/2000/svg',
-          'circle'
-        );
-        circle.setAttribute('cx', cx);
-        circle.setAttribute('cy', cy);
-        circle.setAttribute('r', size);
-        circle.setAttribute('fill', color);
-        if (strokeWidth > 0) {
-          circle.setAttribute('stroke', strokeColor);
-          circle.setAttribute('stroke-width', strokeWidth);
-          circle.setAttribute('vector-effect', 'non-scaling-stroke');
-        }
-        circle.setAttribute('data-id', countryID);
-        circle.classList.add('svgMap-pin');
-        this.pinGroup.appendChild(circle);
-      }.bind(this)
+      // Set up zoom re-clustering
+      if (this.mapPanZoom && !this._clusterZoomHandlerBound) {
+        var me = this;
+        this.mapPanZoom.setOnUpdatedCTM(function () {
+          var newZoom = me.mapPanZoom.getZoom();
+          if (Math.abs(newZoom - (me._lastClusterZoom || 0)) > 0.5) {
+            me._lastClusterZoom = newZoom;
+            var elements = [];
+            Object.keys(me.countries).forEach(function (cid) {
+              var el = document.getElementById(me.id + '-map-country-' + cid);
+              if (el) elements.push(el);
+            });
+            me.createStaticPins(elements);
+          }
+        });
+        this._clusterZoomHandlerBound = true;
+      }
+    } else {
+      // No clustering: render all pins individually
+      allPins.forEach(
+        function (pin) {
+          this.createSinglePin(pin);
+        }.bind(this)
+      );
+    }
+  }
+
+  // Create a single pin
+
+  createSinglePin(pin) {
+    var countryID = pin.countryID;
+    var countryValues = this.options.data.values[countryID];
+    var cx = pin.x;
+    var cy = pin.y;
+
+    var color =
+      (countryValues && countryValues.pinColor) || this.options.pinColor;
+    var size =
+      (countryValues && countryValues.pinSize) || this.options.pinSize;
+    var strokeColor =
+      (countryValues && countryValues.pinStrokeColor) ||
+      this.options.pinStrokeColor;
+    var strokeWidth =
+      (countryValues && countryValues.pinStrokeWidth) ||
+      this.options.pinStrokeWidth;
+
+    if (typeof this.options.onGetPin === 'function') {
+      var custom = this.options.onGetPin(countryID, countryValues);
+      if (custom) {
+        custom.setAttribute('transform', 'translate(' + cx + ',' + cy + ')');
+        this.pinGroup.appendChild(custom);
+        return;
+      }
+    }
+
+    var pinImage =
+      (countryValues && countryValues.pinImage) || this.options.pinImage;
+
+    if (pinImage) {
+      var pinW =
+        (countryValues && countryValues.pinImageWidth) ||
+        this.options.pinImageWidth;
+      var pinH =
+        (countryValues && countryValues.pinImageHeight) ||
+        this.options.pinImageHeight;
+      var img = document.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'image'
+      );
+      img.setAttribute('href', pinImage);
+      img.setAttribute('x', cx - pinW / 2);
+      img.setAttribute('y', cy - pinH / 2);
+      img.setAttribute('width', pinW);
+      img.setAttribute('height', pinH);
+      img.setAttribute('data-id', countryID);
+      img.classList.add('svgMap-pin');
+      this.pinGroup.appendChild(img);
+      return;
+    }
+
+    var circle = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
     );
+    circle.setAttribute('cx', cx);
+    circle.setAttribute('cy', cy);
+    circle.setAttribute('r', size);
+    circle.setAttribute('fill', color);
+    if (strokeWidth > 0) {
+      circle.setAttribute('stroke', strokeColor);
+      circle.setAttribute('stroke-width', strokeWidth);
+      circle.setAttribute('vector-effect', 'non-scaling-stroke');
+    }
+    circle.setAttribute('data-id', countryID);
+    circle.classList.add('svgMap-pin');
+    this.pinGroup.appendChild(circle);
+  }
+
+  // Create a cluster pin
+
+  createClusterPin(cluster) {
+    // Compute centroid of cluster
+    var sumX = 0,
+      sumY = 0;
+    cluster.forEach(function (p) {
+      sumX += p.x;
+      sumY += p.y;
+    });
+    var cx = sumX / cluster.length;
+    var cy = sumY / cluster.length;
+
+    var count = cluster.length;
+    var clusterColor = this.options.clusterColor;
+    var textColor = this.options.clusterTextColor;
+
+    // Create a group for the cluster
+    var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('transform', 'translate(' + cx + ',' + cy + ')');
+    g.classList.add('svgMap-pin', 'svgMap-cluster-pin');
+    g.setAttribute('data-cluster-count', count);
+    g.style.pointerEvents = 'auto';
+    g.style.cursor = 'pointer';
+
+    // Cluster circle - size scales with count
+    var baseRadius = this.options.clusterRadius;
+    var radius = baseRadius + Math.min(count * 1.5, 10);
+
+    var circle = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+    circle.setAttribute('cx', 0);
+    circle.setAttribute('cy', 0);
+    circle.setAttribute('r', radius);
+    circle.setAttribute('fill', clusterColor);
+    circle.setAttribute('stroke', '#ffffff');
+    circle.setAttribute('stroke-width', 2);
+    circle.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.appendChild(circle);
+
+    // Count text
+    var text = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'text'
+    );
+    text.setAttribute('x', 0);
+    text.setAttribute('y', 0);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('dominant-baseline', 'central');
+    text.setAttribute('fill', textColor);
+    text.setAttribute('font-size', Math.max(10, radius * 0.9));
+    text.setAttribute('font-weight', 'bold');
+    text.setAttribute('pointer-events', 'none');
+    text.setAttribute('vector-effect', 'non-scaling-stroke');
+    text.textContent = count;
+    g.appendChild(text);
+
+    // Click handler: zoom into the cluster
+    var me = this;
+    g.addEventListener(
+      'click',
+      function () {
+        if (me.mapPanZoom) {
+          var currentZoom = me.mapPanZoom.getZoom();
+          var targetZoom = Math.min(
+            currentZoom * 1.8,
+            me.options.maxZoom
+          );
+          me.mapPanZoom.zoomAtPoint(targetZoom, { x: cx, y: cy });
+        }
+      },
+      { passive: true }
+    );
+
+    // Hover tooltip showing cluster country names
+    var countryNames = cluster
+      .slice(0, 5)
+      .map(function (p) {
+        return me.getCountryName(p.countryID);
+      });
+    if (cluster.length > 5) {
+      countryNames.push('+' + (cluster.length - 5) + ' more');
+    }
+    g.setAttribute('title', countryNames.join(', '));
+
+    this.pinGroup.appendChild(g);
   }
 
   // Check if a static pin should be shown for a country
@@ -1556,6 +1802,430 @@ export default class svgMap {
     }
 
     return false;
+  }
+
+  // Create the legend component
+
+  createLegend() {
+    if (this.legendElement) {
+      this.legendElement.remove();
+    }
+
+    this.legendElement = this.createElement(
+      'div',
+      'svgMap-legend svgMap-legend-position-' + this.options.legendPosition,
+      this.mapWrapper
+    );
+
+    // Adjust position if zoom buttons are in same corner
+    if (
+      this.options.legendPosition === 'topRight' &&
+      this.options.zoomButtonsPosition === 'topRight'
+    ) {
+      this.legendElement.classList.add('svgMap-legend-offset-topRight');
+    }
+    if (
+      this.options.legendPosition === 'topLeft' &&
+      this.options.zoomButtonsPosition === 'topLeft'
+    ) {
+      this.legendElement.classList.add('svgMap-legend-offset-topLeft');
+    }
+    if (
+      this.options.legendPosition === 'bottomRight' &&
+      this.options.zoomButtonsPosition === 'bottomRight'
+    ) {
+      this.legendElement.classList.add('svgMap-legend-offset-bottomRight');
+    }
+    if (
+      this.options.legendPosition === 'bottomLeft' &&
+      this.options.zoomButtonsPosition === 'bottomLeft'
+    ) {
+      this.legendElement.classList.add('svgMap-legend-offset-bottomLeft');
+    }
+
+    // Toggle button
+    this.legendToggle = this.createElement(
+      'button',
+      'svgMap-legend-toggle',
+      this.legendElement
+    );
+    this.legendToggle.type = 'button';
+    this.legendToggle.innerHTML = '−';
+    this.legendToggle.setAttribute('aria-label', 'Hide legend');
+    this.legendToggle.addEventListener(
+      'click',
+      function () {
+        this.toggleLegend();
+      }.bind(this),
+      { passive: true }
+    );
+
+    // Legend content wrapper
+    this.legendContent = this.createElement(
+      'div',
+      'svgMap-legend-content',
+      this.legendElement
+    );
+
+    // Gradient bar
+    this.legendBar = this.createElement(
+      'div',
+      'svgMap-legend-bar',
+      this.legendContent
+    );
+
+    // Gradient bar SVG for smooth gradient
+    var barSvg = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    );
+    barSvg.setAttribute('width', '100%');
+    barSvg.setAttribute('height', '100%');
+    barSvg.setAttribute('preserveAspectRatio', 'none');
+    var defs = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'defs'
+    );
+    var gradient = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'linearGradient'
+    );
+    gradient.setAttribute('id', this.id + '-legend-gradient');
+    gradient.setAttribute('x1', '0%');
+    gradient.setAttribute('y1', '0%');
+    gradient.setAttribute('x2', '100%');
+    gradient.setAttribute('y2', '0%');
+
+    var colorMin = this.toHex(this.options.colorMin);
+    var colorMax = this.toHex(this.options.colorMax);
+
+    if (this.options.ratioType === 'log') {
+      var stops = 5;
+      for (var i = 0; i <= stops; i++) {
+        var ratio = i / stops;
+        var logRatio = (Math.pow(10, ratio) - 1) / 9;
+        var stopColor = this.getColor(colorMax, colorMin, logRatio);
+        var stop = document.createElementNS(
+          'http://www.w3.org/2000/svg',
+          'stop'
+        );
+        stop.setAttribute('offset', ratio * 100 + '%');
+        stop.setAttribute('stop-color', stopColor);
+        gradient.appendChild(stop);
+      }
+    } else {
+      var stop1 = document.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'stop'
+      );
+      stop1.setAttribute('offset', '0%');
+      stop1.setAttribute('stop-color', colorMin);
+      gradient.appendChild(stop1);
+
+      var stop2 = document.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'stop'
+      );
+      stop2.setAttribute('offset', '100%');
+      stop2.setAttribute('stop-color', colorMax);
+      gradient.appendChild(stop2);
+    }
+
+    defs.appendChild(gradient);
+    barSvg.appendChild(defs);
+
+    var rect = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'rect'
+    );
+    rect.setAttribute('width', '100%');
+    rect.setAttribute('height', '100%');
+    rect.setAttribute(
+      'fill',
+      'url(#' + this.id + '-legend-gradient)'
+    );
+    barSvg.appendChild(rect);
+    this.legendBar.appendChild(barSvg);
+
+    // Tick marks for log scale
+    if (this.options.ratioType === 'log') {
+      this.legendTicks = this.createElement(
+        'div',
+        'svgMap-legend-ticks',
+        this.legendContent
+      );
+    }
+
+    // Labels (min / max values)
+    this.legendLabels = this.createElement(
+      'div',
+      'svgMap-legend-labels',
+      this.legendContent
+    );
+    this.legendMinLabel = this.createElement(
+      'span',
+      'svgMap-legend-label svgMap-legend-label-min',
+      this.legendLabels
+    );
+    this.legendMaxLabel = this.createElement(
+      'span',
+      'svgMap-legend-label svgMap-legend-label-max',
+      this.legendLabels
+    );
+
+    this.legendVisible = true;
+    this.updateLegend();
+  }
+
+  // Update legend values
+
+  updateLegend() {
+    if (!this.legendElement) return;
+
+    var data = this.options.data;
+    var applyData = data.applyData;
+    var dataConfig = data.data[applyData];
+    var min = this._legendMin;
+    var max = this._legendMax;
+
+    // Format values using data.format and thousandSeparator
+    var formatValue = function (val) {
+      var formatted = val;
+      if (dataConfig && dataConfig.thousandSeparator) {
+        formatted = this.numberWithCommas(
+          formatted,
+          dataConfig.thousandSeparator
+        );
+      }
+      if (dataConfig && dataConfig.format) {
+        formatted = dataConfig.format.replace(
+          '{0}',
+          '<span>' + formatted + '</span>'
+        );
+      }
+      return formatted;
+    }.bind(this);
+
+    this.legendMinLabel.innerHTML = formatValue(min);
+    this.legendMaxLabel.innerHTML = formatValue(max);
+
+    // Update log scale ticks
+    if (this.options.ratioType === 'log' && this.legendTicks) {
+      this.legendTicks.innerHTML = '';
+      var tickCount = 5;
+      for (var i = 0; i <= tickCount; i++) {
+        var ratio = i / tickCount;
+        var logMin = Math.log(min + 1);
+        var logMax = Math.log(max + 1);
+        var tickValue = Math.round(
+          Math.exp(logMin + ratio * (logMax - logMin)) - 1
+        );
+        var tick = this.createElement(
+          'span',
+          'svgMap-legend-tick',
+          this.legendTicks
+        );
+        tick.style.left = ratio * 100 + '%';
+        tick.innerHTML = formatValue(tickValue);
+      }
+    }
+
+    // Update gradient colors in case they changed
+    var gradient = document.getElementById(this.id + '-legend-gradient');
+    if (gradient) {
+      var colorMin = this.toHex(this.options.colorMin);
+      var colorMax = this.toHex(this.options.colorMax);
+      var stops = gradient.querySelectorAll('stop');
+      if (this.options.ratioType === 'log' && stops.length > 2) {
+        for (var j = 0; j < stops.length; j++) {
+          var r = j / (stops.length - 1);
+          var logR = (Math.pow(10, r) - 1) / 9;
+          stops[j].setAttribute(
+            'stop-color',
+            this.getColor(colorMax, colorMin, logR)
+          );
+        }
+      } else if (stops.length >= 2) {
+        stops[0].setAttribute('stop-color', colorMin);
+        stops[stops.length - 1].setAttribute('stop-color', colorMax);
+      }
+    }
+  }
+
+  // Toggle legend visibility
+
+  toggleLegend() {
+    if (!this.legendElement) return;
+
+    this.legendVisible = !this.legendVisible;
+    if (this.legendVisible) {
+      this.legendContent.style.display = '';
+      this.legendToggle.innerHTML = '−';
+      this.legendToggle.setAttribute('aria-label', 'Hide legend');
+      this.legendElement.classList.remove('svgMap-legend-collapsed');
+    } else {
+      this.legendContent.style.display = 'none';
+      this.legendToggle.innerHTML = '+';
+      this.legendToggle.setAttribute('aria-label', 'Show legend');
+      this.legendElement.classList.add('svgMap-legend-collapsed');
+    }
+  }
+
+  // Initialize comparison tooltips
+
+  initComparisonTooltips() {
+    this._comparisonCountries = [];
+
+    // Create comparison container
+    if (this.comparisonContainer) {
+      this.comparisonContainer.remove();
+    }
+
+    this.comparisonContainer = this.createElement(
+      'div',
+      'svgMap-comparison-container',
+      this.mapWrapper
+    );
+
+    // Bind click handler for country selection
+    this._comparisonClickHandler = function (e) {
+      if (e.button !== 0) return;
+
+      if (!this._pointerStart) return;
+
+      var dragThreshold = 5;
+      var moved =
+        Math.abs(this._pointerStart.x - e.clientX) > dragThreshold ||
+        Math.abs(this._pointerStart.y - e.clientY) > dragThreshold;
+
+      if (moved) return;
+
+      var countryElement = e.target.closest('.svgMap-country');
+      if (!countryElement) return;
+
+      var countryID = countryElement.dataset.id;
+      this.toggleComparisonCountry(countryID);
+    }.bind(this);
+
+    if (!this._comparisonPointerStartBound) {
+      var originalPointerDown = this.mapImage
+        .getAttribute('data-pointerdown-original') === 'true';
+      if (!originalPointerDown) {
+        this.mapImage.setAttribute('data-pointerdown-original', 'true');
+        this._comparisonPointerStartBound = true;
+      }
+    }
+
+    this.mapImage.addEventListener('click', this._comparisonClickHandler, {
+      passive: true
+    });
+
+    // Also wrap existing pointer tracking
+    var me = this;
+    var existingPointerDown = this._comparisonPointerDown;
+    if (!existingPointerDown) {
+      this._comparisonPointerDown = true;
+      this.mapImage.addEventListener(
+        'pointerdown',
+        function (e) {
+          me._pointerStart = { x: e.clientX, y: e.clientY };
+        },
+        { passive: true }
+      );
+    }
+  }
+
+  // Toggle a country in the comparison set
+
+  toggleComparisonCountry(countryID) {
+    var idx = this._comparisonCountries.indexOf(countryID);
+    if (idx !== -1) {
+      this._comparisonCountries.splice(idx, 1);
+    } else {
+      if (this._comparisonCountries.length >= this.options.comparisonTooltipMax) {
+        this._comparisonCountries.shift();
+      }
+      this._comparisonCountries.push(countryID);
+    }
+    this.updateComparisonTooltips();
+  }
+
+  // Update all comparison tooltips
+
+  updateComparisonTooltips() {
+    if (!this.comparisonContainer) return;
+
+    this.comparisonContainer.innerHTML = '';
+
+    if (this._comparisonCountries.length === 0) {
+      var hint = this.createElement(
+        'div',
+        'svgMap-comparison-hint',
+        this.comparisonContainer
+      );
+      hint.innerHTML = 'Click countries to compare (up to ' +
+        this.options.comparisonTooltipMax + ')';
+      return;
+    }
+
+    var maxCount = this.options.comparisonTooltipMax;
+    var displayCountries = this._comparisonCountries.slice(0, maxCount);
+    var extraCount = this._comparisonCountries.length - maxCount;
+
+    displayCountries.forEach(
+      function (countryID) {
+        this.createComparisonTooltip(countryID);
+      }.bind(this)
+    );
+
+    if (extraCount > 0) {
+      var plusBadge = this.createElement(
+        'div',
+        'svgMap-comparison-plus',
+        this.comparisonContainer
+      );
+      plusBadge.innerHTML = '+' + extraCount;
+    }
+  }
+
+  // Create a single comparison tooltip card
+
+  createComparisonTooltip(countryID) {
+    var card = this.createElement(
+      'div',
+      'svgMap-comparison-card',
+      this.comparisonContainer
+    );
+    card.setAttribute('data-country-id', countryID);
+
+    // Close button
+    var closeBtn = this.createElement(
+      'button',
+      'svgMap-comparison-close',
+      card
+    );
+    closeBtn.type = 'button';
+    closeBtn.innerHTML = '×';
+    closeBtn.setAttribute('aria-label', 'Remove from comparison');
+    closeBtn.addEventListener(
+      'click',
+      function (e) {
+        e.stopPropagation();
+        this.toggleComparisonCountry(countryID);
+      }.bind(this),
+      { passive: true }
+    );
+
+    // Tooltip content
+    var tooltipDiv = this.createElement(
+      'div',
+      'svgMap-comparison-tooltip',
+      card
+    );
+    var content = this.getTooltipContent(countryID, tooltipDiv);
+    tooltipDiv.appendChild(content);
+
+    return card;
   }
 
   // Create the tooltip content

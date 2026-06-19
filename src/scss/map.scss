@@ -270,3 +270,294 @@
   vector-effect: non-scaling-stroke;
   transition: r 250ms;
 }
+
+// Cluster pins
+
+.svgMap-cluster-pin {
+  transition: transform 250ms;
+
+  @media (hover: hover) {
+    &:hover circle {
+      filter: brightness(1.1);
+    }
+  }
+}
+
+// Legend component
+
+.svgMap-legend {
+  position: absolute;
+  z-index: 1;
+  background: $mapControlsBackgroundColor;
+  border-radius: 2px;
+  box-shadow: $mapControlsBoxShadow;
+  padding: 8px 12px 10px;
+  font-size: 12px;
+  color: $textColor;
+  min-width: 180px;
+
+  &.svgMap-legend-position-topLeft {
+    top: 10px;
+    left: 10px;
+  }
+  &.svgMap-legend-position-topRight {
+    top: 10px;
+    right: 10px;
+  }
+  &.svgMap-legend-position-bottomLeft {
+    bottom: 10px;
+    left: 10px;
+  }
+  &.svgMap-legend-position-bottomRight {
+    bottom: 10px;
+    right: 10px;
+  }
+
+  // Offsets to avoid overlapping with zoom buttons
+  &.svgMap-legend-offset-topLeft {
+    left: 52px;
+  }
+  &.svgMap-legend-offset-topRight {
+    right: 52px;
+  }
+  &.svgMap-legend-offset-bottomLeft {
+    left: 52px;
+  }
+  &.svgMap-legend-offset-bottomRight {
+    right: 52px;
+  }
+
+  &.svgMap-legend-collapsed {
+    padding: 4px 8px;
+    min-width: auto;
+  }
+}
+
+.svgMap-legend-toggle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: $textColorLight;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  @media (hover: hover) {
+    &:hover {
+      background: rgba(0, 0, 0, 0.05);
+      color: $textColor;
+    }
+  }
+}
+
+.svgMap-legend-content {
+  padding-top: 18px;
+}
+
+.svgMap-legend-bar {
+  width: 100%;
+  height: 16px;
+  border-radius: 2px;
+  overflow: hidden;
+
+  svg {
+    display: block;
+  }
+}
+
+.svgMap-legend-ticks {
+  position: relative;
+  height: 14px;
+  margin-top: 2px;
+
+  .svgMap-legend-tick {
+    position: absolute;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: $textColorLight;
+    white-space: nowrap;
+
+    span {
+      color: $textColor;
+    }
+  }
+}
+
+.svgMap-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: $textColorLight;
+
+  .svgMap-legend-label {
+    span {
+      color: $textColor;
+      font-weight: 500;
+    }
+
+    &.svgMap-legend-label-min {
+      text-align: left;
+    }
+    &.svgMap-legend-label-max {
+      text-align: right;
+    }
+  }
+}
+
+// Comparison tooltips
+
+.svgMap-comparison-container {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  pointer-events: none;
+}
+
+.svgMap-comparison-hint {
+  background: $mapTooltipBackgroundColor;
+  color: $textColorLight;
+  padding: 10px 16px;
+  border-radius: 2px;
+  box-shadow: 0 0 3px $mapTooltipBoxShadowColor;
+  font-size: 13px;
+  pointer-events: auto;
+}
+
+.svgMap-comparison-card {
+  position: relative;
+  background: transparent;
+  pointer-events: auto;
+  display: flex;
+}
+
+.svgMap-comparison-close {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 2;
+  background: $mapTooltipBackgroundColor;
+  border: 1px solid $mapTooltipColor;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  line-height: 16px;
+  padding: 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: $textColorLight;
+  box-shadow: 0 0 3px $mapTooltipBoxShadowColor;
+
+  @media (hover: hover) {
+    &:hover {
+      color: #f00;
+      border-color: #f00;
+    }
+  }
+}
+
+.svgMap-comparison-tooltip {
+  box-shadow: 0 0 3px $mapTooltipBoxShadowColor;
+  border-radius: 2px;
+  background: $mapTooltipBackgroundColor;
+  pointer-events: none;
+  min-width: 140px;
+  position: relative;
+
+  .svgMap-tooltip-content-container {
+    position: relative;
+    padding: 10px 18px;
+
+    .svgMap-tooltip-flag-container {
+      text-align: center;
+      margin: 2px 0 5px;
+
+      &.svgMap-tooltip-flag-container-emoji {
+        font-size: 40px;
+        line-height: 0;
+        padding: 20px 0 12px;
+      }
+
+      .svgMap-tooltip-flag {
+        display: block;
+        margin: auto;
+        width: auto;
+        height: 28px;
+        padding: 2px;
+        background: $mapTooltipFlagBackgroundColor;
+        border-radius: 2px;
+      }
+    }
+  }
+
+  .svgMap-tooltip-title {
+    white-space: nowrap;
+    font-size: 15px;
+    line-height: 22px;
+    padding: 0 0 6px;
+    text-align: center;
+  }
+
+  .svgMap-tooltip-content {
+    white-space: nowrap;
+    text-align: center;
+    font-size: 12px;
+    color: $textColorLight;
+    margin: -4px 0 0;
+
+    table {
+      padding: 0;
+      border-spacing: 0px;
+      margin: auto;
+
+      td {
+        padding: 1px 0;
+        text-align: left;
+
+        span {
+          color: $textColor;
+        }
+
+        &:first-child {
+          padding-right: 8px;
+          text-align: right;
+        }
+      }
+    }
+
+    .svgMap-tooltip-no-data {
+      padding: 2px 0;
+      color: $textColorLight;
+      font-style: italic;
+    }
+  }
+}
+
+.svgMap-comparison-plus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-weight: bold;
+  font-size: 14px;
+  min-width: 40px;
+  padding: 0 12px;
+  border-radius: 2px;
+  box-shadow: 0 0 3px $mapTooltipBoxShadowColor;
+  pointer-events: auto;
+}
