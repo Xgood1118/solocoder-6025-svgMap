@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+  <head>
+    <title>svgMap R2 Test - Legend, Cluster, Comparison</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="../../dist/svg-map.umd.min.js"></script>
+    <link href="../../dist/svg-map.min.css" rel="stylesheet" />
+    <link href="./demo.css" rel="stylesheet" />
+    <style>
+      body { background: #fff; padding: 40px; }
+      .demo-wrapper { max-width: 1400px; margin: 0 auto; }
+      .demo-container { margin-bottom: 60px; }
+      .svgMap-map-wrapper { min-height: 500px; }
+    </style>
+  </head>
+  <body>
+    <div class="demo-wrapper">
+      <h1>R2 Tests: Legend + Cluster + Comparison</h1>
+
+      <!-- 1. Legend test: thousandSeparator -->
+      <div class="demo-container">
+        <h2>1. Legend with thousandSeparator</h2>
+        <div id="svgMapLegendTest"></div>
+        <script src="./data/gdp.js"></script>
+        <script>
+          // Use gdpAdjusted which already has thousandSeparator: ',' and format: '{0} USD'
+          new svgMap({
+            targetElementID: 'svgMapLegendTest',
+            data: svgMapDataGPD,
+            showLegend: true,
+            mouseWheelZoomEnabled: true,
+            mouseWheelZoomWithKey: true
+          });
+        </script>
+      </div>
+
+      <!-- 2. Cluster pins test -->
+      <div class="demo-container">
+        <h2>2. Cluster Pins</h2>
+        <div id="svgMapClusterTest"></div>
+        <script>
+          var clusterData = JSON.parse(JSON.stringify(svgMapDataGPD));
+          // Add pins to many countries to trigger clustering
+          var pinCountries = ['DE','FR','ES','IT','GB','NL','BE','PT','CH','AT','SE','NO','DK','PL','CZ','HU','RO','BG','GR','IE','FI','LT','LV','EE','SK','SI','HR','RS','BA','AL','MK','MT','LU','MC','LI','SM','AD','VA'];
+          pinCountries.forEach(function(c) {
+            if (clusterData.values[c]) {
+              clusterData.values[c].pinImage = 'https://cdn.jsdelivr.net/gh/hjnilsson/country-flags@latest/svg/' + c.toLowerCase() + '.svg';
+            }
+          });
+          new svgMap({
+            targetElementID: 'svgMapClusterTest',
+            data: clusterData,
+            hideFlag: true,
+            showTooltips: false,
+            staticPins: pinCountries,
+            clusterPins: true,
+            clusterThreshold: 2,
+            clusterRadius: 15,
+            mouseWheelZoomEnabled: true,
+            mouseWheelZoomWithKey: true
+          });
+        </script>
+      </div>
+
+      <!-- 3. Comparison tooltip test: max 4 + "+N" -->
+      <div class="demo-container">
+        <h2>3. Comparison Tooltips</h2>
+        <div id="svgMapComparisonTest"></div>
+        <script>
+          new svgMap({
+            targetElementID: 'svgMapComparisonTest',
+            data: svgMapDataGPD,
+            hideFlag: true,
+            showTooltips: false,
+            comparisonTooltips: true,
+            comparisonTooltipMax: 4,
+            mouseWheelZoomEnabled: true,
+            mouseWheelZoomWithKey: true
+          });
+        </script>
+      </div>
+
+      <!-- 4. Legend with log scale -->
+      <div class="demo-container">
+        <h2>4. Legend with Log Scale</h2>
+        <div id="svgMapLogLegendTest"></div>
+        <script src="./data/population.js"></script>
+        <script>
+          new svgMap({
+            targetElementID: 'svgMapLogLegendTest',
+            data: svgMapDataPopulation,
+            showLegend: true,
+            ratioType: 'log',
+            mouseWheelZoomEnabled: true,
+            mouseWheelZoomWithKey: true
+          });
+        </script>
+      </div>
+
+      <!-- 5. Legend toggle (hide/show) -->
+      <div class="demo-container">
+        <h2>5. Legend Toggle + Position</h2>
+        <div id="svgMapToggleLegendTest"></div>
+        <script>
+          new svgMap({
+            targetElementID: 'svgMapToggleLegendTest',
+            data: svgMapDataGPD,
+            showLegend: true,
+            legendPosition: 'topRight',
+            mouseWheelZoomEnabled: true,
+            mouseWheelZoomWithKey: true
+          });
+        </script>
+      </div>
+    </div>
+  </body>
+</html>

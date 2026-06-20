@@ -1983,10 +1983,28 @@ export default class svgMap {
     if (!this.legendElement) return;
 
     var data = this.options.data;
+    if (!data || !data.applyData || !data.data || !data.data[data.applyData]) {
+      this.legendMinLabel.innerHTML = '';
+      this.legendMaxLabel.innerHTML = '';
+      if (this.legendTicks) {
+        this.legendTicks.innerHTML = '';
+      }
+      return;
+    }
+
     var applyData = data.applyData;
     var dataConfig = data.data[applyData];
     var min = this._legendMin;
     var max = this._legendMax;
+
+    if (min === null || min === undefined || max === null || max === undefined) {
+      this.legendMinLabel.innerHTML = '';
+      this.legendMaxLabel.innerHTML = '';
+      if (this.legendTicks) {
+        this.legendTicks.innerHTML = '';
+      }
+      return;
+    }
 
     // Format values using data.format and thousandSeparator
     var formatValue = function (val) {
@@ -2133,6 +2151,9 @@ export default class svgMap {
         { passive: true }
       );
     }
+
+    // Show initial hint
+    this.updateComparisonTooltips();
   }
 
   // Toggle a country in the comparison set
@@ -2142,9 +2163,6 @@ export default class svgMap {
     if (idx !== -1) {
       this._comparisonCountries.splice(idx, 1);
     } else {
-      if (this._comparisonCountries.length >= this.options.comparisonTooltipMax) {
-        this._comparisonCountries.shift();
-      }
       this._comparisonCountries.push(countryID);
     }
     this.updateComparisonTooltips();
